@@ -22,6 +22,25 @@ git clone https://github.com/nicobailon/pi-model-switch ~/.pi/agent/extensions/m
 
 Restart Pi to load the extension.
 
+### Verify Installation
+
+After restarting Pi, the `switch_model` tool should be available. Ask the agent to "list available models" to confirm.
+
+### Updating
+
+If you used curl:
+```bash
+curl -o ~/.pi/agent/extensions/model-switch/index.ts \
+  https://raw.githubusercontent.com/nicobailon/pi-model-switch/main/index.ts
+```
+
+If you cloned:
+```bash
+cd ~/.pi/agent/extensions/model-switch && git pull
+```
+
+Restart Pi after updating.
+
 ## Usage
 
 Once installed, the agent gains a `switch_model` tool. Just ask naturally:
