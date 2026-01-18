@@ -41,6 +41,43 @@ cd ~/.pi/agent/extensions/model-switch && git pull
 
 Restart Pi after updating.
 
+## Configuration
+
+### Model Aliases
+
+Create `aliases.json` in the extension directory to define shortcuts:
+
+```bash
+~/.pi/agent/extensions/model-switch/aliases.json
+```
+
+```json
+{
+  "cheap": "google/gemini-2.5-flash",
+  "fast": "google/gemini-2.5-flash",
+  "coding": "anthropic/claude-opus-4-5",
+  "budget": ["openai/gpt-5-mini", "google/gemini-2.5-flash", "anthropic/claude-3-5-haiku-latest"]
+}
+```
+
+- **String value**: Must be an available model or returns an error
+- **Array value**: Uses first available model in the list (fallback chain)
+
+Then just say "switch to cheap" or "use coding model".
+
+### AGENTS.md
+
+Add model switching preferences to your `AGENTS.md` for contextual decisions:
+
+```markdown
+## Model preferences
+- Simple file ops / quick questions: switch to "cheap"
+- Complex refactoring / architecture: switch to "coding"
+- Default to budget-friendly models unless quality is needed
+```
+
+The agent will use aliases when appropriate based on your guidance.
+
 ## Usage
 
 Once installed, the agent gains a `switch_model` tool. Just ask naturally:
@@ -82,9 +119,10 @@ Filters models by partial match on provider, id, or name. Returns all matching m
 ### Switch action
 
 Matches models by:
-1. Exact `provider/id` match
-2. Exact `id` match
-3. Partial match on id, name, or provider
+1. Alias lookup (if defined in `aliases.json`)
+2. Exact `provider/id` match
+3. Exact `id` match
+4. Partial match on id, name, or provider
 
 If multiple models match, it asks you to be more specific.
 
