@@ -1,6 +1,6 @@
 # pi-model-switch
 
-A [Pi coding agent](https://github.com/badlogic/pi-mono) extension that gives the agent the ability to list and switch models on its own.
+A [Pi coding agent](https://github.com/badlogic/pi-mono) extension that gives the agent the ability to list, search, and switch models on its own.
 
 With this extension, you can tell the agent things like "switch to a cheaper model" or "use Claude for this task" and it will handle the model change itself, without you needing to use `/model` or keyboard shortcuts.
 
@@ -42,8 +42,9 @@ The extension registers a single tool:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `action` | `"list"` \| `"switch"` | List available models or switch to one |
-| `search` | string (optional) | For switch: search term to match model by provider, id, or name |
+| `action` | `"list"` \| `"search"` \| `"switch"` | List all models, search/filter models, or switch to one |
+| `search` | string (optional) | For search/switch: term to match model by provider, id, or name |
+| `provider` | string (optional) | Filter to a specific provider (e.g. 'anthropic', 'openai', 'google') |
 
 ### List action
 
@@ -54,6 +55,10 @@ Returns all models you have API keys configured for, showing:
 - Capabilities (reasoning, vision)
 - Cost per 1M tokens (input/output)
 - Which model is currently active
+
+### Search action
+
+Filters models by partial match on provider, id, or name. Returns all matching models with full details.
 
 ### Switch action
 

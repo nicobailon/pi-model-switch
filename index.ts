@@ -6,22 +6,45 @@ const extension: ExtensionFactory = (pi) => {
 		name: "switch_model",
 		label: "Switch Model",
 		description:
-			"List available models or switch to a different model. Use when the user asks to change models or when you need a model with different capabilities (reasoning, vision, cost, context window).",
+			"List, search, or switch models. Use when the user asks to change models or when you need a model with different capabilities (reasoning, vision, cost, context window).",
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("list"), Type.Literal("switch")], {
-				description: "list: show available models. switch: change to a different model.",
+			action: Type.Union([Type.Literal("list"), Type.Literal("search"), Type.Literal("switch")], {
+				description: "list: show all available models. search: filter models by query. switch: change to a different model.",
 			}),
 			search: Type.Optional(
 				Type.String({
 					description:
-						"For switch action: search term to match model by provider, id, or name (e.g. 'sonnet', 'opus', 'gpt-5.2', 'anthropic/claude')",
+						"For search/switch actions: search term to match model by provider, id, or name (e.g. 'sonnet', 'opus', 'gpt-5.2', 'anthropic/claude')",
+				}),
+			),
+			provider: Type.Optional(
+				Type.String({
+					description:
+						"Filter to a specific provider (e.g. 'anthropic', 'openai', 'google', 'openrouter')",
 				}),
 			),
 		}),
 
 		async execute(toolCallId, params, onUpdate, ctx) {
-			const models = ctx.modelRegistry.getAvailable();
+			let models = ctx.modelRegistry.getAvailable();
 			const currentModel = ctx.model;
+
+			// Filter by provider if specified
+			if (params.provider) {
+				const providerFilter = params.provider.toLowerCase();
+				models = models.filter((m) => m.provider.toLowerCase() === providerFilter);
+				if (models.length === 0) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `No models available for provider "${params.provider}". Available providers: ${[...new Set(ctx.modelRegistry.getAvailable().map((m) => m.provider))].join(", ")}`,
+							},
+						],
+						isError: true,
+					};
+				}
+			}
 
 			if (params.action === "list") {
 				if (models.length === 0) {
@@ -54,6 +77,52 @@ const extension: ExtensionFactory = (pi) => {
 						{
 							type: "text",
 							text: `Available models (${models.length}):\n\n${lines.join("\n\n")}`,
+						},
+					],
+				};
+			}
+
+			if (params.action === "search") {
+				if (!params.search) {
+					return {
+						content: [{ type: "text", text: "search parameter required for search action" }],
+						isError: true,
+					};
+				}
+
+				const search = params.search.toLowerCase();
+				const matches = models.filter(
+					(m) =>
+						m.id.toLowerCase().includes(search) ||
+						m.name.toLowerCase().includes(search) ||
+						m.provider.toLowerCase().includes(search),
+				);
+
+				if (matches.length === 0) {
+					return {
+						content: [{ type: "text", text: `No models found matching "${params.search}"` }],
+					};
+				}
+
+				const lines = matches.map((m) => {
+					const current = currentModel && m.provider === currentModel.provider && m.id === currentModel.id;
+					const marker = current ? " (current)" : "";
+					const capabilities = [
+						m.reasoning ? "reasoning" : null,
+						m.input.includes("image") ? "vision" : null,
+					]
+						.filter(Boolean)
+						.join(", ");
+					const capStr = capabilities ? ` [${capabilities}]` : "";
+					const costStr = `$${m.cost.input.toFixed(2)}/$${m.cost.output.toFixed(2)} per 1M tokens (in/out)`;
+					return `${m.provider}/${m.id}${marker}${capStr}\n  ${m.name} | ctx: ${m.contextWindow.toLocaleString()} | max: ${m.maxTokens.toLocaleString()}\n  ${costStr}`;
+				});
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Models matching "${params.search}" (${matches.length}):\n\n${lines.join("\n\n")}`,
 						},
 					],
 				};
@@ -140,7 +209,7 @@ const extension: ExtensionFactory = (pi) => {
 			}
 
 			return {
-				content: [{ type: "text", text: 'Invalid action. Use "list" or "switch".' }],
+				content: [{ type: "text", text: 'Invalid action. Use "list", "search", or "switch".' }],
 				isError: true,
 			};
 		},
