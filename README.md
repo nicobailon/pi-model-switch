@@ -6,18 +6,8 @@ With this extension, you can tell the agent things like "switch to a cheaper mod
 
 ## Installation
 
-Copy the extension to your Pi extensions directory:
-
 ```bash
-mkdir -p ~/.pi/agent/extensions/model-switch
-curl -o ~/.pi/agent/extensions/model-switch/index.ts \
-  https://raw.githubusercontent.com/nicobailon/pi-model-switch/main/index.ts
-```
-
-Or clone the repo:
-
-```bash
-git clone https://github.com/nicobailon/pi-model-switch ~/.pi/agent/extensions/model-switch
+pi install npm:pi-model-switch
 ```
 
 Restart Pi to load the extension.
