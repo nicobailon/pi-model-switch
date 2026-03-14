@@ -35,11 +35,30 @@ Restart Pi after updating.
 
 ### Model Aliases
 
-Create `aliases.json` in the extension directory to define shortcuts:
+Model aliases can be defined in multiple locations with a priority-based fallback chain:
+
+| Level | Path | Purpose |
+|-------|------|---------|
+| 1. Project | `{project}/.pi/aliases.json` | Per-project customization, committed to repo |
+| 2. User | `~/.pi/agent/aliases.json` | Global user aliases, survives npm updates |
+| 3. Extension | `~/.pi/agent/extensions/model-switch/aliases.json` | Bundled defaults |
+
+The extension loads from **project → user → extension** in order, using the first file found.
+
+#### Example locations
 
 ```bash
+# Project-level (highest priority)
+/home/pcaro/my-project/.pi/aliases.json
+
+# User-level (middle priority)
+~/.pi/agent/aliases.json
+
+# Extension-level (lowest priority - bundled with extension)
 ~/.pi/agent/extensions/model-switch/aliases.json
 ```
+
+#### Defining aliases
 
 ```json
 {
@@ -54,6 +73,8 @@ Create `aliases.json` in the extension directory to define shortcuts:
 - **Array value**: Uses first available model in the list (fallback chain)
 
 Then just say "switch to cheap" or "use coding model".
+
+> **Tip**: Use user-level (`~/.pi/agent/aliases.json`) for your personal aliases - they won't be overwritten when updating the extension.
 
 ### AGENTS.md
 
@@ -78,7 +99,7 @@ Once installed, the agent gains a `switch_model` tool. Just ask naturally:
 - "Change to a model with vision capabilities"
 - "Use a cheaper model for this task"
 
-The agent will list models or switch as appropriate.
+The agent will list models or switch as appropriate. When aliases are loaded, the tool output shows which file they're loaded from (e.g., `Aliases: cheap, coding (from ~/.pi/agent/aliases.json)`).
 
 ## Tool Reference
 
