@@ -3,25 +3,44 @@ import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 type AliasConfig = Record<string, string | string[]>;
 
-function loadAliases(extensionDir: string): { aliases: AliasConfig; error?: string } {
-	const aliasPath = join(extensionDir, "aliases.json");
-	if (!existsSync(aliasPath)) {
-		return { aliases: {} };
+/**
+ * Alias file locations in priority order:
+ * 1. Project-level: {project}/.pi/aliases.json - allows per-project customization
+ * 2. User-level: ~/.pi/agent/aliases.json - global user aliases, survives npm updates
+ * 3. Extension-level: {extensionDir}/aliases.json - bundled defaults
+ */
+function getAliasLocations(cwd: string, extensionDir: string): string[] {
+	return [
+		join(cwd, ".pi", "aliases.json"), // Project-level
+		join(homedir(), ".pi", "agent", "aliases.json"), // User-level
+		join(extensionDir, "aliases.json"), // Extension-level (bundled defaults)
+	];
+}
+
+function loadAliases(cwd: string, extensionDir: string): { aliases: AliasConfig; source?: string; error?: string } {
+	const locations = getAliasLocations(cwd, extensionDir);
+
+	for (const aliasPath of locations) {
+		if (existsSync(aliasPath)) {
+			try {
+				const content = readFileSync(aliasPath, "utf-8");
+				return { aliases: JSON.parse(content), source: aliasPath };
+			} catch (e) {
+				return { aliases: {}, error: `Failed to load ${aliasPath}: ${e instanceof Error ? e.message : e}` };
+			}
+		}
 	}
-	try {
-		const content = readFileSync(aliasPath, "utf-8");
-		return { aliases: JSON.parse(content) };
-	} catch (e) {
-		return { aliases: {}, error: `Failed to load aliases.json: ${e instanceof Error ? e.message : e}` };
-	}
+
+	return { aliases: {} };
 }
 
 const extension: ExtensionFactory = (pi) => {
-	const __dirname = dirname(fileURLToPath(import.meta.url));
-	const { aliases, error: aliasLoadError } = loadAliases(__dirname);
+	// Extension directory is fixed at load time
+	const extensionDir = dirname(fileURLToPath(import.meta.url));
 
 	pi.registerTool({
 		name: "switch_model",
@@ -47,6 +66,8 @@ const extension: ExtensionFactory = (pi) => {
 		}),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			// Load aliases at execution time to support project-level aliases
+			const { aliases, source: aliasSource, error: aliasLoadError } = loadAliases(ctx.cwd, extensionDir);
 			let models = ctx.modelRegistry.getAvailable();
 			const currentModel = ctx.model;
 
@@ -82,7 +103,7 @@ const extension: ExtensionFactory = (pi) => {
 				const aliasInfo = aliasLoadError
 					? `\n\nWarning: ${aliasLoadError}`
 					: Object.keys(aliases).length > 0
-						? `\n\nAliases: ${Object.keys(aliases).join(", ")}`
+						? `\n\nAliases: ${Object.keys(aliases).join(", ")}${aliasSource ? ` (from ${aliasSource})` : ""}`
 						: "";
 
 				const lines = models.map((m) => {
