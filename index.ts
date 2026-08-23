@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,64 +23,73 @@ function parseModelSpec(spec: string): { provider: string; modelId: string } | n
 	return { provider, modelId };
 }
 
-function loadAliases(extensionDir: string): { aliases: AliasConfig; error?: string } {
-	const aliasPath = join(extensionDir, "aliases.json");
-	if (!existsSync(aliasPath)) {
-		return { aliases: {} };
-	}
+function loadAliases(cwd: string, extensionDir: string): { aliases: AliasConfig; source?: string; error?: string } {
+	const aliasPaths = [
+		join(cwd, ".pi", "aliases.json"),
+		join(homedir(), ".pi", "agent", "aliases.json"),
+		join(extensionDir, "aliases.json"),
+	];
 
-	try {
-		const content = readFileSync(aliasPath, "utf-8");
-		const parsed = JSON.parse(content);
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-			return { aliases: {}, error: "Failed to load aliases.json: expected a top-level object of alias -> string|string[]" };
+	for (const aliasPath of aliasPaths) {
+		if (!existsSync(aliasPath)) {
+			continue;
 		}
 
-		const aliases: AliasConfig = {};
-		for (const [rawKey, rawValue] of Object.entries(parsed)) {
-			const key = rawKey.trim();
-			if (!key) {
-				return { aliases: {}, error: "Failed to load aliases.json: alias names must be non-empty strings" };
+		try {
+			const content = readFileSync(aliasPath, "utf-8");
+			const parsed = JSON.parse(content);
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+				return { aliases: {}, error: `Failed to load ${aliasPath}: expected a top-level object of alias -> string|string[]` };
 			}
 
-			if (typeof rawValue === "string") {
-				const value = rawValue.trim();
-				if (!value) {
-					return { aliases: {}, error: `Failed to load aliases.json: alias "${key}" must be a non-empty string or string[]` };
+			const aliases: AliasConfig = {};
+			for (const [rawKey, rawValue] of Object.entries(parsed)) {
+				const key = rawKey.trim();
+				if (!key) {
+					return { aliases: {}, error: `Failed to load ${aliasPath}: alias names must be non-empty strings` };
 				}
-				if (!parseModelSpec(value)) {
-					return { aliases: {}, error: `Failed to load aliases.json: alias "${key}" must target provider/modelId` };
+
+				if (typeof rawValue === "string") {
+					const value = rawValue.trim();
+					if (!value) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must be a non-empty string or string[]` };
+					}
+					if (!parseModelSpec(value)) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must target provider/modelId` };
+					}
+					aliases[key] = value;
+					continue;
 				}
-				aliases[key] = value;
-				continue;
+
+				if (!Array.isArray(rawValue) || rawValue.length === 0) {
+					return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must be a non-empty string or string[]` };
+				}
+
+				const values: string[] = [];
+				for (const candidate of rawValue) {
+					if (typeof candidate !== "string" || !candidate.trim()) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" contains an invalid model target` };
+					}
+
+					const value = candidate.trim();
+					if (!parseModelSpec(value)) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" contains invalid target "${value}"` };
+					}
+					if (!values.includes(value)) {
+						values.push(value);
+					}
+				}
+
+				aliases[key] = values;
 			}
 
-			if (!Array.isArray(rawValue) || rawValue.length === 0) {
-				return { aliases: {}, error: `Failed to load aliases.json: alias "${key}" must be a non-empty string or string[]` };
-			}
-
-			const values: string[] = [];
-			for (const candidate of rawValue) {
-				if (typeof candidate !== "string" || !candidate.trim()) {
-					return { aliases: {}, error: `Failed to load aliases.json: alias "${key}" contains an invalid model target` };
-				}
-
-				const value = candidate.trim();
-				if (!parseModelSpec(value)) {
-					return { aliases: {}, error: `Failed to load aliases.json: alias "${key}" contains invalid target "${value}"` };
-				}
-				if (!values.includes(value)) {
-					values.push(value);
-				}
-			}
-
-			aliases[key] = values;
+			return { aliases, source: aliasPath };
+		} catch (error) {
+			return { aliases: {}, error: `Failed to load ${aliasPath}: ${error instanceof Error ? error.message : String(error)}` };
 		}
-
-		return { aliases };
-	} catch (error) {
-		return { aliases: {}, error: `Failed to load aliases.json: ${error instanceof Error ? error.message : String(error)}` };
 	}
+
+	return { aliases: {} };
 }
 
 function formatModelLine(
@@ -107,18 +117,17 @@ function formatModelLine(
 
 const extension: ExtensionFactory = (pi) => {
 	const extensionDir = dirname(fileURLToPath(import.meta.url));
-	const { aliases, error: aliasLoadError } = loadAliases(extensionDir);
 
 	pi.registerTool({
 		name: "switch_model",
 		label: "Switch Model",
 		description:
-			"List, search, or switch models. Supports aliases defined in aliases.json (e.g. 'cheap', 'coding'). Use when the user mentions a model by name, asks to change/switch/try/test with a specific model, or when you need a model with different capabilities (reasoning, vision, cost, context window).",
+			"Show the current model, list/search models, or switch models. Supports aliases defined in aliases.json (e.g. 'cheap', 'coding'). Use when the user mentions a model by name, asks to identify or change the model, or when you need a model with different capabilities (reasoning, vision, cost, context window).",
 		promptSnippet:
-			"Use this tool when the user asks to list/search/switch models, requests a specific model/provider, or asks for cheaper/faster/vision/reasoning-capable models. Prefer action='search' before action='switch' when intent is ambiguous.",
+			"Use this tool when the user asks to identify, list, search, or switch models, requests a specific model/provider, or asks for cheaper/faster/vision/reasoning-capable models. Prefer action='search' before action='switch' when intent is ambiguous.",
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("list"), Type.Literal("search"), Type.Literal("switch")], {
-				description: "Action to perform: 'list' (show all models), 'search' (filter by query), or 'switch' (change model)",
+			action: Type.Union([Type.Literal("current"), Type.Literal("list"), Type.Literal("search"), Type.Literal("switch")], {
+				description: "Action to perform: 'current' (show the active model), 'list' (show all models), 'search' (filter by query), or 'switch' (change model)",
 			}),
 			search: Type.Optional(
 				Type.String({
@@ -139,6 +148,21 @@ const extension: ExtensionFactory = (pi) => {
 			const normalizedProvider = provider.toLowerCase();
 			const search = params.search?.trim() ?? "";
 			const normalizedSearch = search.toLowerCase();
+
+			if (params.action === "current") {
+				if (!currentModel) {
+					return {
+						content: [{ type: "text", text: "No model is currently active" }],
+						isError: true,
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: `Current model: ${currentModel.provider}/${currentModel.id} (${currentModel.name})` }],
+				};
+			}
+
+			const { aliases, source: aliasSource, error: aliasLoadError } = loadAliases(ctx.cwd, extensionDir);
 			const aliasWarning = aliasLoadError ? `\n\nWarning: ${aliasLoadError}` : "";
 
 			if (normalizedProvider) {
@@ -171,8 +195,10 @@ const extension: ExtensionFactory = (pi) => {
 				const aliasInfo = aliasLoadError
 					? `\n\nWarning: ${aliasLoadError}`
 					: Object.keys(aliases).length > 0
-						? `\n\nAliases: ${Object.keys(aliases).join(", ")}`
-						: "";
+						? `\n\nAliases: ${Object.keys(aliases).join(", ")}${aliasSource ? ` (from ${aliasSource})` : ""}`
+						: aliasSource
+							? `\n\nAliases: (none) (from ${aliasSource})`
+							: "";
 				const lines = models.map((model) => formatModelLine(model, currentModel));
 				return {
 					content: [{ type: "text", text: `Available models (${models.length}):${aliasInfo}\n\n${lines.join("\n\n")}` }],
