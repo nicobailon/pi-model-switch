@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-23
+
+### Highlights
+- Check the active model directly with the new `current` action.
+- Keep project-specific aliases close to each project while still supporting user and package defaults.
+- See which alias file is active when listing models.
+- Install against Pi's current extension runtime packages.
+
 ### Added
 - Added `switch_model` action `current` to identify the active model without listing all available models. Thanks to [@ajitid](https://github.com/ajitid) for #2.
 
