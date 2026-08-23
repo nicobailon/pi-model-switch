@@ -8,6 +8,9 @@
 ### Changed
 - Added project, user, and extension alias-file fallback locations with source reporting in `list`. Thanks to [@pcaro](https://github.com/pcaro) for #1.
 
+### Fixed
+- Migrated extension tool schemas from `@sinclair/typebox` to `typebox` 1.x so packaged installs follow Pi's current extension runtime contract.
+
 ## [0.1.4] - 2026-04-14
 
 ### Fixed

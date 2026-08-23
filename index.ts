@@ -1,5 +1,5 @@
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

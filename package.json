@@ -2,6 +2,10 @@
   "name": "pi-model-switch",
   "version": "0.1.4",
   "description": "Model switching extension for pi coding agent",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
   "keywords": ["pi-package", "pi", "pi-coding-agent", "extension", "model", "switch", "llm"],
   "license": "MIT",
   "pi": {
