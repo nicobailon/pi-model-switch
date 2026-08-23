@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Added `switch_model` action `current` to identify the active model without listing all available models. Thanks to [@ajitid](https://github.com/ajitid) for #2.
+
+### Changed
+- Added project, user, and extension alias-file fallback locations with source reporting in `list`. Thanks to [@pcaro](https://github.com/pcaro) for #1.
+
 ## [0.1.4] - 2026-04-14
 
 ### Fixed
