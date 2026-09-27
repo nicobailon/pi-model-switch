@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Added optional thinking-level control to `switch_model`, including per-alias configuration and effective-level reporting when Pi clamps unsupported levels. Omitting the level preserves existing Pi behavior. Thanks to [@mii9000](https://github.com/mii9000) for #5.
+
 ### Fixed
 - Updated `switch_model` for Pi 0.87's tool contract: provider-compatible action enums, thrown tool failures, and explicit result details.
 - Added typechecking, behavioral tests, and CI to catch future Pi extension API drift.

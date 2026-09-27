@@ -1,12 +1,19 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type AliasConfig = Record<string, string | string[]>;
+type AliasTarget = {
+	model: string;
+	thinkingLevel?: ThinkingLevel;
+};
+
+type AliasConfig = Record<string, AliasTarget | AliasTarget[]>;
+
+const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function parseModelSpec(spec: string): { provider: string; modelId: string } | null {
 	const normalized = spec.trim();
@@ -22,6 +29,34 @@ function parseModelSpec(spec: string): { provider: string; modelId: string } | n
 	}
 
 	return { provider, modelId };
+}
+
+function parseAliasTarget(rawTarget: unknown): AliasTarget | null {
+	if (typeof rawTarget === "string") {
+		const model = rawTarget.trim();
+		return model && parseModelSpec(model) ? { model } : null;
+	}
+	if (typeof rawTarget !== "object" || rawTarget === null || Array.isArray(rawTarget)) {
+		return null;
+	}
+
+	if (!("model" in rawTarget) || typeof rawTarget.model !== "string") {
+		return null;
+	}
+	const model = rawTarget.model.trim();
+	if (!model || !parseModelSpec(model)) {
+		return null;
+	}
+	const rawThinkingLevel = "thinkingLevel" in rawTarget ? rawTarget.thinkingLevel : undefined;
+	const thinkingLevel = THINKING_LEVELS.find((level) => level === rawThinkingLevel);
+	if (rawThinkingLevel !== undefined && thinkingLevel === undefined) {
+		return null;
+	}
+
+	return {
+		model,
+		...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+	};
 }
 
 function loadAliases(cwd: string, extensionDir: string): { aliases: AliasConfig; source?: string; error?: string } {
@@ -40,7 +75,7 @@ function loadAliases(cwd: string, extensionDir: string): { aliases: AliasConfig;
 			const content = readFileSync(aliasPath, "utf-8");
 			const parsed = JSON.parse(content);
 			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-				return { aliases: {}, error: `Failed to load ${aliasPath}: expected a top-level object of alias -> string|string[]` };
+				return { aliases: {}, error: `Failed to load ${aliasPath}: expected a top-level object of alias -> target|target[]` };
 			}
 
 			const aliases: AliasConfig = {};
@@ -50,34 +85,27 @@ function loadAliases(cwd: string, extensionDir: string): { aliases: AliasConfig;
 					return { aliases: {}, error: `Failed to load ${aliasPath}: alias names must be non-empty strings` };
 				}
 
-				if (typeof rawValue === "string") {
-					const value = rawValue.trim();
-					if (!value) {
-						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must be a non-empty string or string[]` };
+				if (!Array.isArray(rawValue)) {
+					const target = parseAliasTarget(rawValue);
+					if (!target) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" has an invalid target or thinkingLevel` };
 					}
-					if (!parseModelSpec(value)) {
-						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must target provider/modelId` };
-					}
-					aliases[key] = value;
+					aliases[key] = target;
 					continue;
 				}
 
-				if (!Array.isArray(rawValue) || rawValue.length === 0) {
-					return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must be a non-empty string or string[]` };
+				if (rawValue.length === 0) {
+					return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" must have at least one target` };
 				}
 
-				const values: string[] = [];
+				const values: AliasTarget[] = [];
 				for (const candidate of rawValue) {
-					if (typeof candidate !== "string" || !candidate.trim()) {
-						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" contains an invalid model target` };
+					const target = parseAliasTarget(candidate);
+					if (!target) {
+						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" contains an invalid target or thinkingLevel` };
 					}
-
-					const value = candidate.trim();
-					if (!parseModelSpec(value)) {
-						return { aliases: {}, error: `Failed to load ${aliasPath}: alias "${key}" contains invalid target "${value}"` };
-					}
-					if (!values.includes(value)) {
-						values.push(value);
+					if (!values.some((value) => value.model === target.model && value.thinkingLevel === target.thinkingLevel)) {
+						values.push(target);
 					}
 				}
 
@@ -141,6 +169,11 @@ const extension: ExtensionFactory = (pi) => {
 					description: "Filter to a specific provider (e.g. 'anthropic', 'openai', 'google', 'openrouter')",
 				}),
 			),
+			thinkingLevel: Type.Optional(
+				StringEnum(THINKING_LEVELS, {
+					description: "Thinking level to apply after switching. Pi clamps unsupported levels to the model's capabilities.",
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			let models = ctx.modelRegistry.getAvailable();
@@ -156,7 +189,12 @@ const extension: ExtensionFactory = (pi) => {
 				}
 
 				return {
-					content: [{ type: "text", text: `Current model: ${currentModel.provider}/${currentModel.id} (${currentModel.name})` }],
+					content: [
+						{
+							type: "text",
+							text: `Current model: ${currentModel.provider}/${currentModel.id} (${currentModel.name}), thinking: ${pi.getThinkingLevel()}`,
+						},
+					],
 					details: undefined,
 				};
 			}
@@ -229,13 +267,32 @@ const extension: ExtensionFactory = (pi) => {
 				throw new Error("search parameter required for switch action");
 			}
 
+			const activateModel = async (
+				model: (typeof models)[number],
+				requestedThinking: ThinkingLevel | undefined,
+			): Promise<{ changedModel: boolean; thinkingText: string } | null> => {
+				const changedModel = !currentModel || model.provider !== currentModel.provider || model.id !== currentModel.id;
+				if (changedModel && !(await pi.setModel(model))) {
+					return null;
+				}
+
+				if (requestedThinking === undefined) {
+					return { changedModel, thinkingText: "" };
+				}
+
+				pi.setThinkingLevel(requestedThinking);
+				const effectiveThinking = pi.getThinkingLevel();
+				const requestedText = effectiveThinking === requestedThinking ? "" : ` (requested ${requestedThinking})`;
+				return { changedModel, thinkingText: `, thinking: ${effectiveThinking}${requestedText}` };
+			};
+
 			const aliasKey = Object.keys(aliases).find((key) => key.toLowerCase() === normalizedSearch);
 			if (aliasKey) {
 				const aliasValue = aliases[aliasKey];
 				const candidates = Array.isArray(aliasValue) ? aliasValue : [aliasValue];
 
 				for (const candidate of candidates) {
-					const [provider, ...idParts] = candidate.split("/");
+					const [provider, ...idParts] = candidate.model.split("/");
 					const id = idParts.join("/");
 					const aliasMatch = models.find(
 						(model) => model.provider.toLowerCase() === provider.toLowerCase() && model.id.toLowerCase() === id.toLowerCase(),
@@ -244,25 +301,22 @@ const extension: ExtensionFactory = (pi) => {
 						continue;
 					}
 
-					if (currentModel && aliasMatch.provider === currentModel.provider && aliasMatch.id === currentModel.id) {
-						return {
-							content: [{ type: "text", text: `Already using ${aliasMatch.provider}/${aliasMatch.id}` }],
-							details: undefined,
-						};
+					const requestedThinking = params.thinkingLevel ?? candidate.thinkingLevel;
+					const activation = await activateModel(aliasMatch, requestedThinking);
+					if (!activation) {
+						continue;
 					}
-
-					const success = await pi.setModel(aliasMatch);
-					if (!success) {
-						throw new Error(`Failed to switch to ${aliasMatch.provider}/${aliasMatch.id}`);
-					}
+					const actionText = activation.changedModel
+						? `Switched to ${aliasMatch.provider}/${aliasMatch.id} (${aliasMatch.name}) via alias "${aliasKey}"`
+						: `Already using ${aliasMatch.provider}/${aliasMatch.id}${requestedThinking === undefined ? "" : ` via alias "${aliasKey}"`}`;
 
 					return {
-						content: [{ type: "text", text: `Switched to ${aliasMatch.provider}/${aliasMatch.id} (${aliasMatch.name}) via alias "${aliasKey}"` }],
+						content: [{ type: "text", text: `${actionText}${activation.thinkingText}` }],
 						details: undefined,
 					};
 				}
 
-				throw new Error(`No available models found for alias "${aliasKey}". Tried: ${candidates.join(", ")}`);
+				throw new Error(`No available models found for alias "${aliasKey}". Tried: ${candidates.map((candidate) => candidate.model).join(", ")}`);
 			}
 
 			let match = models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedSearch);
@@ -289,20 +343,16 @@ const extension: ExtensionFactory = (pi) => {
 				throw new Error(`No model found matching "${search}"${aliasWarning}`);
 			}
 
-			if (currentModel && match.provider === currentModel.provider && match.id === currentModel.id) {
-				return {
-					content: [{ type: "text", text: `Already using ${match.provider}/${match.id}` }],
-					details: undefined,
-				};
-			}
-
-			const success = await pi.setModel(match);
-			if (!success) {
+			const activation = await activateModel(match, params.thinkingLevel);
+			if (!activation) {
 				throw new Error(`Failed to switch to ${match.provider}/${match.id}`);
 			}
+			const actionText = activation.changedModel
+				? `Switched to ${match.provider}/${match.id} (${match.name})`
+				: `Already using ${match.provider}/${match.id}`;
 
 			return {
-				content: [{ type: "text", text: `Switched to ${match.provider}/${match.id} (${match.name})` }],
+				content: [{ type: "text", text: `${actionText}${activation.thinkingText}` }],
 				details: undefined,
 			};
 		},

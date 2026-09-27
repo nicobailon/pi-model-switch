@@ -23,13 +23,14 @@ Parameters:
 - `action`: `current | list | search | switch`
 - `search?`: query for `search` and `switch`
 - `provider?`: provider filter
+- `thinkingLevel?`: `minimal | low | medium | high | xhigh | max`
 
 Behavior:
 
 - `current`: shows the active model without listing every model
 - `list`: shows available authenticated models
 - `search`: filters by provider, id, or name
-- `switch`: resolves aliases first, then does exact or partial model matching
+- `switch`: resolves aliases first, then does exact or partial model matching, and optionally applies a thinking level
 
 ## Aliases
 
@@ -50,8 +51,14 @@ For example, define aliases in the extension-level file:
 ```json
 {
   "cheap": "google/gemini-2.5-flash",
-  "coding": "anthropic/claude-opus-4-5",
-  "budget": ["openai/gpt-5-mini", "google/gemini-2.5-flash"]
+  "coding": {
+    "model": "anthropic/claude-opus-4-5",
+    "thinkingLevel": "high"
+  },
+  "budget": [
+    { "model": "openai/gpt-5-mini", "thinkingLevel": "low" },
+    "google/gemini-2.5-flash"
+  ]
 }
 ```
 
@@ -59,9 +66,12 @@ Rules:
 
 - top-level value must be an object
 - alias names must be non-empty strings
-- each target must be `provider/modelId`
-- string alias: one exact model target
+- each target must be a `provider/modelId` string or an object containing `model` and optional `thinkingLevel`
+- string alias: one exact model target (backward compatible)
+- object alias: `{ "model": "provider/modelId", "thinkingLevel": "high" }`
 - array alias: fallback chain; first available authenticated target wins
+- explicit `thinkingLevel` on `switch_model` overrides the alias setting
+- omit `thinkingLevel` to preserve Pi's existing model-switch behavior; Pi clamps unsupported levels per model and the tool reports the effective level
 
 ## License
 
