@@ -1,6 +1,6 @@
 # pi-model-switch
 
-A [Pi coding agent](https://github.com/badlogic/pi-mono) extension for direct model switching.
+A [Pi coding agent](https://github.com/earendil-works/pi) extension for direct model switching.
 
 It provides one tool, `switch_model`, for identifying, listing, searching, and directly switching models.
 

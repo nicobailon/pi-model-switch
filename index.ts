@@ -1,4 +1,5 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -126,7 +127,7 @@ const extension: ExtensionFactory = (pi) => {
 		promptSnippet:
 			"Use this tool when the user asks to identify, list, search, or switch models, requests a specific model/provider, or asks for cheaper/faster/vision/reasoning-capable models. Prefer action='search' before action='switch' when intent is ambiguous.",
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("current"), Type.Literal("list"), Type.Literal("search"), Type.Literal("switch")], {
+			action: StringEnum(["current", "list", "search", "switch"] as const, {
 				description: "Action to perform: 'current' (show the active model), 'list' (show all models), 'search' (filter by query), or 'switch' (change model)",
 			}),
 			search: Type.Optional(
@@ -151,14 +152,12 @@ const extension: ExtensionFactory = (pi) => {
 
 			if (params.action === "current") {
 				if (!currentModel) {
-					return {
-						content: [{ type: "text", text: "No model is currently active" }],
-						isError: true,
-					};
+					throw new Error("No model is currently active");
 				}
 
 				return {
 					content: [{ type: "text", text: `Current model: ${currentModel.provider}/${currentModel.id} (${currentModel.name})` }],
+					details: undefined,
 				};
 			}
 
@@ -168,15 +167,9 @@ const extension: ExtensionFactory = (pi) => {
 			if (normalizedProvider) {
 				models = models.filter((model) => model.provider.toLowerCase() === normalizedProvider);
 				if (models.length === 0) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `No models available for provider "${provider}". Available providers: ${[...new Set(ctx.modelRegistry.getAvailable().map((model) => model.provider))].join(", ")}`,
-							},
-						],
-						isError: true,
-					};
+					throw new Error(
+						`No models available for provider "${provider}". Available providers: ${[...new Set(ctx.modelRegistry.getAvailable().map((model) => model.provider))].join(", ")}`,
+					);
 				}
 			}
 
@@ -189,6 +182,7 @@ const extension: ExtensionFactory = (pi) => {
 								text: "No models available. Configure API keys for providers you want to use (see `pi --help` or check ~/.pi/agent/auth.json).",
 							},
 						],
+						details: undefined,
 					};
 				}
 
@@ -202,15 +196,13 @@ const extension: ExtensionFactory = (pi) => {
 				const lines = models.map((model) => formatModelLine(model, currentModel));
 				return {
 					content: [{ type: "text", text: `Available models (${models.length}):${aliasInfo}\n\n${lines.join("\n\n")}` }],
+					details: undefined,
 				};
 			}
 
 			if (params.action === "search") {
 				if (!search) {
-					return {
-						content: [{ type: "text", text: "search parameter required for search action" }],
-						isError: true,
-					};
+					throw new Error("search parameter required for search action");
 				}
 
 				const matches = models.filter(
@@ -222,20 +214,19 @@ const extension: ExtensionFactory = (pi) => {
 				if (matches.length === 0) {
 					return {
 						content: [{ type: "text", text: `No models found matching "${search}"` }],
+						details: undefined,
 					};
 				}
 
 				const lines = matches.map((model) => formatModelLine(model, currentModel));
 				return {
 					content: [{ type: "text", text: `Models matching "${search}" (${matches.length}):\n\n${lines.join("\n\n")}` }],
+					details: undefined,
 				};
 			}
 
 			if (!search) {
-				return {
-					content: [{ type: "text", text: "search parameter required for switch action" }],
-					isError: true,
-				};
+				throw new Error("search parameter required for switch action");
 			}
 
 			const aliasKey = Object.keys(aliases).find((key) => key.toLowerCase() === normalizedSearch);
@@ -256,26 +247,22 @@ const extension: ExtensionFactory = (pi) => {
 					if (currentModel && aliasMatch.provider === currentModel.provider && aliasMatch.id === currentModel.id) {
 						return {
 							content: [{ type: "text", text: `Already using ${aliasMatch.provider}/${aliasMatch.id}` }],
+							details: undefined,
 						};
 					}
 
 					const success = await pi.setModel(aliasMatch);
 					if (!success) {
-						return {
-							content: [{ type: "text", text: `Failed to switch to ${aliasMatch.provider}/${aliasMatch.id}` }],
-							isError: true,
-						};
+						throw new Error(`Failed to switch to ${aliasMatch.provider}/${aliasMatch.id}`);
 					}
 
 					return {
 						content: [{ type: "text", text: `Switched to ${aliasMatch.provider}/${aliasMatch.id} (${aliasMatch.name}) via alias "${aliasKey}"` }],
+						details: undefined,
 					};
 				}
 
-				return {
-					content: [{ type: "text", text: `No available models found for alias "${aliasKey}". Tried: ${candidates.join(", ")}` }],
-					isError: true,
-				};
+				throw new Error(`No available models found for alias "${aliasKey}". Tried: ${candidates.join(", ")}`);
 			}
 
 			let match = models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedSearch);
@@ -294,36 +281,29 @@ const extension: ExtensionFactory = (pi) => {
 					match = candidateModels[0];
 				} else if (candidateModels.length > 1) {
 					const list = candidateModels.map((model) => `  ${model.provider}/${model.id}`).join("\n");
-					return {
-						content: [{ type: "text", text: `Multiple models match "${search}":\n${list}\n\nBe more specific.${aliasWarning}` }],
-						isError: true,
-					};
+					throw new Error(`Multiple models match "${search}":\n${list}\n\nBe more specific.${aliasWarning}`);
 				}
 			}
 
 			if (!match) {
-				return {
-					content: [{ type: "text", text: `No model found matching "${search}"${aliasWarning}` }],
-					isError: true,
-				};
+				throw new Error(`No model found matching "${search}"${aliasWarning}`);
 			}
 
 			if (currentModel && match.provider === currentModel.provider && match.id === currentModel.id) {
 				return {
 					content: [{ type: "text", text: `Already using ${match.provider}/${match.id}` }],
+					details: undefined,
 				};
 			}
 
 			const success = await pi.setModel(match);
 			if (!success) {
-				return {
-					content: [{ type: "text", text: `Failed to switch to ${match.provider}/${match.id}` }],
-					isError: true,
-				};
+				throw new Error(`Failed to switch to ${match.provider}/${match.id}`);
 			}
 
 			return {
 				content: [{ type: "text", text: `Switched to ${match.provider}/${match.id} (${match.name})` }],
+				details: undefined,
 			};
 		},
 	});

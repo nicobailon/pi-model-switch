@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Updated `switch_model` for Pi 0.87's tool contract: provider-compatible action enums, thrown tool failures, and explicit result details.
+- Added typechecking, behavioral tests, and CI to catch future Pi extension API drift.
+
 ## [0.2.0] - 2026-08-23
 
 ### Highlights
