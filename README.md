@@ -2,7 +2,7 @@
 
 A [Pi coding agent](https://github.com/earendil-works/pi) extension for direct model switching.
 
-It provides one tool, `switch_model`, for identifying, listing, searching, and directly switching models.
+It provides one tool, `switch_model`, for identifying, listing, searching, and directly switching models, and warns in the footer when any model switch would re-bill a warm prompt cache.
 
 Foreground orchestration now lives in `pi-orchestrate`.
 
@@ -40,7 +40,11 @@ Switching models is free, but the next request re-bills the whole conversation o
 ⚠ next request re-bills ~120k cached tokens (~$0.54) on anthropic/claude-haiku-4-5
 ```
 
-This covers `/model`, Ctrl+P cycling, and `switch_model`, and clears once the next request starts. Switch back before sending to avoid the cost. Returning to a model whose cache is still warm does not warn. `switch_model` results include the same note so the agent can tell you.
+This covers `/model`, Ctrl+P cycling, and `switch_model`, and clears once the next request starts. After `/model` or Ctrl+P, switch back before sending to avoid the cost. When the agent calls `switch_model` mid-run, the next request goes out right away, so the cost is already paid; the tool result includes the same note so the agent can tell you.
+
+A model's cache counts as warm when its last request on the current branch used the prompt cache (or pi refreshed it) within the model's cache lifetime. The lifetime comes from the model's `promptCache` metadata, using the long tier when `PI_CACHE_RETENTION=long`, and defaults to 5 minutes. Compaction resets it. Returning to a model whose cache is still warm does not warn.
+
+The cost is an estimate: the current context size priced at the new model's cache-write (or input) rate minus its cache-read rate.
 
 ## Aliases
 
