@@ -32,6 +32,16 @@ Behavior:
 - `search`: filters by provider, id, or name
 - `switch`: resolves aliases first, then does exact or partial model matching, and optionally applies a thinking level
 
+## Prompt cache warning
+
+Switching models is free, but the next request re-bills the whole conversation on the new model because its prompt cache is cold. When the current model's cache is still warm and the re-bill is significant (at least 20k tokens or $0.10), the extension shows a footer status such as:
+
+```text
+⚠ next request re-bills ~120k cached tokens (~$0.54) on anthropic/claude-haiku-4-5
+```
+
+This covers `/model`, Ctrl+P cycling, and `switch_model`, and clears once the next request starts. Switch back before sending to avoid the cost. Returning to a model whose cache is still warm does not warn. `switch_model` results include the same note so the agent can tell you.
+
 ## Aliases
 
 Aliases can be defined in the first existing file from these locations, in priority order:

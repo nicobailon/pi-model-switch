@@ -14,7 +14,7 @@ const primaryModel = {
 	input: ["text"] as const,
 	contextWindow: 128_000,
 	maxTokens: 8_192,
-	cost: { input: 1, output: 2 },
+	cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 },
 };
 
 const secondaryModel = {
@@ -29,11 +29,15 @@ type SetupOptions = {
 	setModel?: ExtensionAPI["setModel"];
 	setThinkingLevel?: (level: ThinkingLevel) => void;
 	getThinkingLevel?: () => ThinkingLevel;
+	handlers?: Map<string, (event: unknown, ctx: ExtensionContext) => void>;
 };
 
 function setupTool(options: SetupOptions = {}): ToolDefinition {
 	let registered: ToolDefinition | undefined;
 	extension({
+		on(event: string, handler: (event: unknown, ctx: ExtensionContext) => void) {
+			options.handlers?.set(event, handler);
+		},
 		registerTool(tool: ToolDefinition) {
 			registered = tool;
 		},
@@ -49,15 +53,22 @@ function context({
 	currentModel = primaryModel as typeof primaryModel | null,
 	models = [primaryModel, secondaryModel],
 	cwd = process.cwd(),
+	branch = [] as unknown[],
+	status = new Map<string, string | undefined>(),
 }: {
 	currentModel?: typeof primaryModel | null;
 	models?: typeof primaryModel[];
 	cwd?: string;
+	branch?: unknown[];
+	status?: Map<string, string | undefined>;
 } = {}): ExtensionContext {
 	return {
 		cwd,
 		model: currentModel,
 		modelRegistry: { getAvailable: () => models },
+		sessionManager: { getBranch: () => branch },
+		getContextUsage: () => ({ tokens: 100_000, contextWindow: 128_000, percent: 78 }),
+		ui: { setStatus: (key: string, text: string | undefined) => status.set(key, text) },
 	} as unknown as ExtensionContext;
 }
 
@@ -174,6 +185,40 @@ test("same-model requests skip setModel and only set thinking when requested", a
 	assert.match(text(changed), /^Already using provider-a\/model-a, thinking: low$/);
 	assert.equal(omitted.details, undefined);
 	assert.equal(changed.details, undefined);
+});
+
+test("warns about re-billing only when leaving a warm cache for a cold one", async () => {
+	const assistantAt = (model: typeof primaryModel, ageMs: number) => ({
+		type: "message",
+		message: {
+			role: "assistant",
+			provider: model.provider,
+			model: model.id,
+			timestamp: Date.now() - ageMs,
+			usage: { cacheRead: 90_000, cacheWrite: 10_000 },
+		},
+	});
+	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+	const tool = setupTool({ handlers });
+	const status = new Map<string, string | undefined>();
+	const warm = context({ branch: [assistantAt(primaryModel, 60_000)], status });
+	const onSelect = handlers.get("model_select");
+	assert.ok(onSelect);
+
+	onSelect({ type: "model_select", model: secondaryModel, previousModel: primaryModel, source: "cycle" }, warm);
+	const [key, warning] = [...status.entries()][0] ?? [];
+	assert.match(warning ?? "", /re-bills ~100k cached tokens .*provider-b\/model-b/);
+
+	// Cycling back to the still-warm model clears the warning.
+	const bothWarm = context({ branch: [assistantAt(primaryModel, 60_000), assistantAt(secondaryModel, 1_000)], status });
+	onSelect({ type: "model_select", model: primaryModel, previousModel: secondaryModel, source: "cycle" }, bothWarm);
+	assert.equal(status.get(key!), undefined);
+
+	const warmSwitch = await tool.execute("call-warm", { action: "switch", search: "provider-b/model-b" }, undefined, undefined, warm);
+	assert.match(text(warmSwitch), /\n\nNote: next request re-bills ~100k cached tokens/);
+	const cold = context({ branch: [assistantAt(primaryModel, 10 * 60_000)] });
+	const coldSwitch = await tool.execute("call-cold", { action: "switch", search: "provider-b/model-b" }, undefined, undefined, cold);
+	assert.equal(text(coldSwitch), "Switched to provider-b/model-b (Model B)");
 });
 
 test("reports requested thinking only when Pi clamps it", async () => {
