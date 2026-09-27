@@ -1,6 +1,6 @@
 {
   "name": "pi-model-switch",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model switching extension for pi coding agent",
   "type": "module",
   "files": [

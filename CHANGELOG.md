@@ -2,16 +2,24 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-26
+
+### Highlights
+- Set a thinking level when switching models, either directly or as part of an alias.
+- See a heads-up before a model switch makes your next request re-pay for the whole conversation, with an estimated token count and cost.
+- The agent is more careful about switching models on its own mid-conversation.
+- Works with Pi 0.87.
+
 ### Added
-- Added optional thinking-level control to `switch_model`, including per-alias configuration and effective-level reporting when Pi clamps unsupported levels. Omitting the level preserves existing Pi behavior. Thanks to [@mii9000](https://github.com/mii9000) for #5.
-- Warn before a model switch re-bills a warm prompt cache. Any switch (`/model`, Ctrl+P, or `switch_model`) shows a footer status with the estimated re-billed tokens and cost until the next request, and `switch_model` results include the same note. Switching back to a model whose cache is still warm does not warn.
+- `switch_model` accepts an optional thinking level, and aliases can set one too. If the model doesn't support the requested level, the result shows the level Pi actually used. Leaving it out keeps the previous behavior. Thanks to [@mii9000](https://github.com/mii9000) for #5.
+- A footer warning appears when switching models (`/model`, Ctrl+P, or `switch_model`) would throw away a still-warm prompt cache, showing roughly how many tokens and dollars the next request will re-bill. It clears once that request starts, and `switch_model` results include the same note. Switching back to a model whose cache is still warm doesn't warn.
 
 ### Changed
-- The `switch_model` prompt guidance now tells the agent to switch mid-conversation only when the user asks or the benefit is clear, since switching re-bills the full context.
+- The agent is now told to switch models mid-conversation only when you ask or the benefit is clear, since each switch re-bills the full conversation.
 
 ### Fixed
-- Updated `switch_model` for Pi 0.87's tool contract: provider-compatible action enums, thrown tool failures, and explicit result details.
-- Added typechecking, behavioral tests, and CI to catch future Pi extension API drift.
+- `switch_model` works with Pi 0.87's tool API again.
+- Added type checks, tests, and CI so future Pi API changes are caught before release.
 
 ## [0.2.0] - 2026-08-23
 
