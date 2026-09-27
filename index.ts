@@ -1,5 +1,5 @@
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { StringEnum, type ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { StringEnum, type Api, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,6 +14,54 @@ type AliasTarget = {
 type AliasConfig = Record<string, AliasTarget | AliasTarget[]>;
 
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const CACHE_STATUS_KEY = "model-switch-cache";
+
+function cacheTtlMs(model: Model<Api>): number {
+	const retention = process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
+	return (model.promptCache?.[retention] ?? 300) * 1000;
+}
+
+/**
+ * Warns when leaving a model whose prompt cache is still warm. The switch itself
+ * is free; the next request re-bills the whole prompt on the new model. Uses the
+ * same thresholds as pi's after-the-fact "Cache miss after model switch" notice.
+ */
+function cacheSwitchWarning(ctx: ExtensionContext, from: Model<Api>, to: Model<Api>): string | undefined {
+	const lastRequestAt = new Map<string, number>();
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type === "compaction" || entry.type === "branch_summary") {
+			lastRequestAt.clear();
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			// Providers that never report cache activity have nothing to lose.
+			if (entry.message.usage.cacheRead + entry.message.usage.cacheWrite === 0) {
+				continue;
+			}
+			lastRequestAt.set(`${entry.message.provider}/${entry.message.model}`, entry.message.timestamp);
+		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
+			lastRequestAt.set(`${entry.provider}/${entry.model}`, Date.parse(entry.timestamp));
+		}
+	}
+
+	const now = Date.now();
+	const isWarm = (model: Model<Api>) =>
+		now - (lastRequestAt.get(`${model.provider}/${model.id}`) ?? -Infinity) < cacheTtlMs(model);
+	// Switching back to a model whose cache is still warm re-bills nothing already cached.
+	if (!isWarm(from) || isWarm(to)) {
+		return undefined;
+	}
+
+	const tokens = ctx.getContextUsage()?.tokens;
+	if (!tokens) {
+		return undefined;
+	}
+	const paidRate = to.cost.cacheWrite || to.cost.input;
+	const cost = (tokens * Math.max(0, paidRate - to.cost.cacheRead)) / 1_000_000;
+	if (tokens < 20_000 && cost < 0.1) {
+		return undefined;
+	}
+	const costText = cost >= 0.01 ? ` (~$${cost.toFixed(2)})` : "";
+	return `next request re-bills ~${Math.round(tokens / 1000)}k cached tokens${costText} on ${to.provider}/${to.id}`;
+}
 
 function parseModelSpec(spec: string): { provider: string; modelId: string } | null {
 	const normalized = spec.trim();
@@ -147,13 +195,23 @@ function formatModelLine(
 const extension: ExtensionFactory = (pi) => {
 	const extensionDir = dirname(fileURLToPath(import.meta.url));
 
+	pi.on("model_select", (event, ctx) => {
+		const warning = event.source !== "restore" && event.previousModel
+			? cacheSwitchWarning(ctx, event.previousModel, event.model)
+			: undefined;
+		ctx.ui.setStatus(CACHE_STATUS_KEY, warning && `⚠ ${warning}`);
+	});
+	pi.on("turn_start", (_event, ctx) => {
+		ctx.ui.setStatus(CACHE_STATUS_KEY, undefined);
+	});
+
 	pi.registerTool({
 		name: "switch_model",
 		label: "Switch Model",
 		description:
 			"Show the current model, list/search models, or switch models. Supports aliases defined in aliases.json (e.g. 'cheap', 'coding'). Use when the user mentions a model by name, asks to identify or change the model, or when you need a model with different capabilities (reasoning, vision, cost, context window).",
 		promptSnippet:
-			"Use this tool when the user asks to identify, list, search, or switch models, requests a specific model/provider, or asks for cheaper/faster/vision/reasoning-capable models. Prefer action='search' before action='switch' when intent is ambiguous.",
+			"Use this tool when the user asks to identify, list, search, or switch models, requests a specific model/provider, or asks for cheaper/faster/vision/reasoning-capable models. Prefer action='search' before action='switch' when intent is ambiguous. Switching mid-conversation re-bills the full context on the new model, so only switch when the user asks or the benefit is clear.",
 		parameters: Type.Object({
 			action: StringEnum(["current", "list", "search", "switch"] as const, {
 				description: "Action to perform: 'current' (show the active model), 'list' (show all models), 'search' (filter by query), or 'switch' (change model)",
@@ -270,20 +328,22 @@ const extension: ExtensionFactory = (pi) => {
 			const activateModel = async (
 				model: (typeof models)[number],
 				requestedThinking: ThinkingLevel | undefined,
-			): Promise<{ changedModel: boolean; thinkingText: string } | null> => {
+			): Promise<{ changedModel: boolean; thinkingText: string; cacheNote: string } | null> => {
 				const changedModel = !currentModel || model.provider !== currentModel.provider || model.id !== currentModel.id;
+				const cacheWarning = changedModel && currentModel ? cacheSwitchWarning(ctx, currentModel, model) : undefined;
 				if (changedModel && !(await pi.setModel(model))) {
 					return null;
 				}
+				const cacheNote = cacheWarning ? `\n\nNote: ${cacheWarning}.` : "";
 
 				if (requestedThinking === undefined) {
-					return { changedModel, thinkingText: "" };
+					return { changedModel, thinkingText: "", cacheNote };
 				}
 
 				pi.setThinkingLevel(requestedThinking);
 				const effectiveThinking = pi.getThinkingLevel();
 				const requestedText = effectiveThinking === requestedThinking ? "" : ` (requested ${requestedThinking})`;
-				return { changedModel, thinkingText: `, thinking: ${effectiveThinking}${requestedText}` };
+				return { changedModel, thinkingText: `, thinking: ${effectiveThinking}${requestedText}`, cacheNote };
 			};
 
 			const aliasKey = Object.keys(aliases).find((key) => key.toLowerCase() === normalizedSearch);
@@ -311,7 +371,7 @@ const extension: ExtensionFactory = (pi) => {
 						: `Already using ${aliasMatch.provider}/${aliasMatch.id}${requestedThinking === undefined ? "" : ` via alias "${aliasKey}"`}`;
 
 					return {
-						content: [{ type: "text", text: `${actionText}${activation.thinkingText}` }],
+						content: [{ type: "text", text: `${actionText}${activation.thinkingText}${activation.cacheNote}` }],
 						details: undefined,
 					};
 				}
@@ -352,7 +412,7 @@ const extension: ExtensionFactory = (pi) => {
 				: `Already using ${match.provider}/${match.id}`;
 
 			return {
-				content: [{ type: "text", text: `${actionText}${activation.thinkingText}` }],
+				content: [{ type: "text", text: `${actionText}${activation.thinkingText}${activation.cacheNote}` }],
 				details: undefined,
 			};
 		},
